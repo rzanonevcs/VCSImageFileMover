@@ -29,7 +29,8 @@ fn main() {
     }
 
     let source_dir = Path::new(&args[1]);
-    let dest_dir = Path::new(&args[2]);
+    let dest_dir_str = args[2].clone();
+    let dest_dir = Path::new(&dest_dir_str);
 
     //Generate a channel which will send events from tx to rx
     let (watcher_tx, mut watcher_rx) = unbounded_channel::<Result<Event>>();
@@ -49,15 +50,31 @@ fn main() {
     //Spawn the task which copies the files
     let (path_sender, mut path_receiver) = unbounded_channel::<PathBuf>();
     let rt_in_hashmap = rt.clone();
+    let dest_dir_clone = dest_dir.clone();
+
     let mut paths_handles = std::collections::HashMap::<PathBuf, JoinHandle<()>>::new();
     let rt_in_hashmap_adder = rt_in_hashmap.clone();
     rt_in_hashmap.clone().spawn( async move {
         loop {
             let sent_path= path_receiver.recv().await.unwrap();
-            paths_handles.entry(sent_path.to_path_buf()).or_insert_with_key(|path| {
-                let path_clone = path.clone();
-                rt_in_hashmap_adder.clone().spawn_blocking( move || {
-                    println!("Path: {:?}", path_clone)
+            paths_handles.entry(sent_path).or_insert_with_key(|path| {
+                let owned_path_clone = path.clone();
+                let dest_dir_inner= dest_dir_clone.clone();
+                rt_in_hashmap_adder.clone().spawn( async move {
+                    let path_clone = owned_path_clone.as_path();
+                    let dest_path = create_dest_path_from_relative(path_clone, dest_dir_inner);
+                    println!("Path: {:?}", path_clone);
+                    if let Some(parent) = dest_path.parent() {
+                        tokio::fs::create_dir_all(parent).await.unwrap();
+                    }
+                    match tokio::fs::copy(path_clone, dest_path).await {
+                        Ok(_res) => {
+                            tokio::fs::remove_file(path_clone).await.unwrap();
+                        }
+                        Err(fault) => {
+                            eprintln!("{:?}", fault);
+                        }
+                    }
                 })
             });
         }
@@ -75,20 +92,6 @@ fn main() {
                             if path.is_file() {
                                 let relative_path = path.strip_prefix(source_dir).unwrap();
                                 path_sender.send(relative_path.to_owned()).unwrap();
-
-                                /*
-                                if let Some(parent) = dest_path.parent() {
-                                    std::fs::create_dir_all(parent).unwrap();
-                                }
-                                match std::fs::copy(&path, &dest_path) {
-                                    Ok(_res) => {
-                                        std::fs::remove_file(&path).unwrap();
-                                    }
-                                    Err(fault) => {
-                                        eprintln!("{:?}", fault);
-                                    }
-                                }
-                                */
                             }
                         }
                     }
@@ -99,6 +102,6 @@ fn main() {
     });
 }
 
-fn create_dest_path_from_relative<'a>(rel_path : &'a Path, dest_dir : &Path) -> PathBuf {
-    return Path::new(dest_dir).join(rel_path);
+fn create_dest_path_from_relative<'a>(rel_path : &'a Path, dest_dir_path : &Path) -> PathBuf {
+    return Path::new(dest_dir_path).join(rel_path);
 }
