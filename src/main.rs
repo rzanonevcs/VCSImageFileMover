@@ -49,20 +49,18 @@ fn main() {
     //Spawn the task which copies the files
     let (path_sender, mut path_receiver) = unbounded_channel::<PathBuf>();
     let rt_in_hashmap = rt.clone();
-    let _copy_handle = rt.spawn(async move {
-        let mut paths_handles = std::collections::HashMap::<PathBuf, JoinHandle<()>>::new();
-        let rt_in_hashmap_adder = rt_in_hashmap.clone();
-        rt_in_hashmap.clone().spawn( async move {
-            loop {
-                let sent_path= path_receiver.recv().await.unwrap();
-                paths_handles.entry(sent_path.to_path_buf()).or_insert_with_key(|path| {
-                    let path_clone = path.clone();
-                    rt_in_hashmap_adder.clone().spawn_blocking( move || {
-                        println!("Path: {:?}", path_clone)
-                    })
-                });
-            }
-        })
+    let mut paths_handles = std::collections::HashMap::<PathBuf, JoinHandle<()>>::new();
+    let rt_in_hashmap_adder = rt_in_hashmap.clone();
+    rt_in_hashmap.clone().spawn( async move {
+        loop {
+            let sent_path= path_receiver.recv().await.unwrap();
+            paths_handles.entry(sent_path.to_path_buf()).or_insert_with_key(|path| {
+                let path_clone = path.clone();
+                rt_in_hashmap_adder.clone().spawn_blocking( move || {
+                    println!("Path: {:?}", path_clone)
+                })
+            });
+        }
     });
 
     // Create the path watcher
